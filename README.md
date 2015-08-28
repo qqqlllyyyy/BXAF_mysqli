@@ -22,13 +22,13 @@ Type-hinted placeholders are great because
 
 Supported placeholders at the moment are:
 
-?s ("string")  - strings (also DATE, FLOAT and DECIMAL)
-?i ("integer") - the name says it all 
-?n ("name")    - identifiers (table and field names) 
-?a ("array")   - complex placeholder for IN() operator  (substituted with string of 'a','b','c' format, without parentesis)
-?u ("update")  - complex placeholder for SET operator (substituted with string of `field`='value',`field`='value' format)
+- ?s ("string")  - strings (also DATE, FLOAT and DECIMAL)
+- ?i ("integer") - the name says it all 
+- ?n ("name")    - identifiers (table and field names) 
+- ?a ("array")   - complex placeholder for IN() operator  (substituted with string of 'a','b','c' format, without parentesis)
+- ?u ("update")  - complex placeholder for SET operator (substituted with string of `field`='value',`field`='value' format)
 and
-?p ("parsed") - special type placeholder, for inserting already parsed statements without any processing, to avoid double parsing.
+- ?p ("parsed") - special type placeholder, for inserting already parsed statements without any processing, to avoid double - parsing.
 
 
 Connection:
