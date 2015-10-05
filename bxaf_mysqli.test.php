@@ -18,7 +18,7 @@ error_reporting(1);
 
 
 
-include_once("bxaf_mysqli.php");
+include_once("bxaf_mysqli.src.php");
 
 
 
@@ -55,6 +55,25 @@ $opts = array(
 
 $db = new bxaf_mysqli($opts);
 $table = 'tree_structure1';
+
+
+$data = $db->get_column_names($table);
+echo "get_column_names: $sql<pre>" . print_r($data, true) . "</pre>";
+
+$data = $db->MetaColumnNames($table);
+echo "get_column_names: $sql<pre>" . print_r($data, true) . "</pre>";
+
+//define('ADODB_FETCH_NUM',1); 
+$db->SetFetchMode(1);
+$data = $db->get_all("SELECT `name` FROM `$table`");
+echo "get_all: $sql<pre>" . print_r($data, true) . "</pre>";
+
+//MYSQLI_ASSOC or MYSQLI_NUM
+$db->set_fetch_mode(MYSQLI_ASSOC);
+$data = $db->get_all("SELECT `name` FROM `$table`");
+echo "get_all: $sql<pre>" . print_r($data, true) . "</pre>";
+
+
 
 $sql = "SELECT `name` FROM `$table` WHERE `id` = ?i";
 $data = $db->get_one($sql, 1067);
