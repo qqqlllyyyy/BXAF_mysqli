@@ -77,6 +77,7 @@ class bxaf_mysqli
 	private $stats;
 	private $show_error;
 	private $error_output;
+	private $fetch_mode; // MYSQLI_ASSOC, MYSQLI_NUM
 
 	private $defaults = array(
 		'host'      => 'localhost',
@@ -86,13 +87,14 @@ class bxaf_mysqli
 		'port'      => 3306,
 		'socket'    => NULL,
 		'pconnect'  => TRUE,
+		'fetch_mode'  => MYSQLI_ASSOC,
+		'flags'  	=> NULL, //MYSQLI_CLIENT_COMPRESS | MYSQLI_CLIENT_FOUND_ROWS | MYSQLI_CLIENT_IGNORE_SPACE | MYSQLI_CLIENT_INTERACTIVE | MYSQLI_CLIENT_SSL
 		'charset'   => 'utf8',
 		'show_error' => 0, //0 for hiding errors or 1 for outputing errors in errors.txt
 		'error_output' => 'bxaf_mysqli.errors.txt' //Error output file
 	);
 
-	const RESULT_ASSOC = MYSQLI_ASSOC;
-	const RESULT_NUM   = MYSQLI_NUM;
+
 
 	function __construct($opt = array())
 	{
@@ -100,6 +102,9 @@ class bxaf_mysqli
 
 		$this->show_error  = $opt['show_error'];
 		$this->error_output  = $opt['error_output'];
+		
+		if($opt['fetch_mode'] == MYSQLI_NUM) $this->fetch_mode = MYSQLI_NUM;
+		else $this->fetch_mode  = MYSQLI_ASSOC;
 
 		if (isset($opt['mysqli']))
 		{
@@ -114,20 +119,42 @@ class bxaf_mysqli
 			}
 		}
 
-		if ($opt['pconnect'])
-		{
-			$opt['host'] = "p:".$opt['host'];
-		}
+		
+		if (($opt['host'] == 'localhost') || ($opt['host'] == '127.0.0.1')){
+			if($opt['pconnect']) $opt['host'] = "p:".$opt['host'];
+			
+			$this->conn = mysqli_connect($opt['host'], $opt['user'], $opt['pass'], $opt['db'], $opt['port'], $opt['socket']);
 
-		@$this->conn = mysqli_connect($opt['host'], $opt['user'], $opt['pass'], $opt['db'], $opt['port'], $opt['socket']);
-		if ( !$this->conn )
-		{
-			$this->error(mysqli_connect_errno()." ".mysqli_connect_error());
+			if (mysqli_connect_errno()) {
+				die("Connect failed: %s\n" . mysqli_connect_error());
+			}
+
+			if ( ! $this->conn ){
+				$this->error(mysqli_connect_errno() . " ". mysqli_connect_error());
+			}
+
 		}
+		else {
+			if($opt['pconnect']) $opt['host'] = "p:".$opt['host'];
+			
+			$this->conn = mysqli_init();
+			
+			if ($this->conn){
+				if ( ! mysqli_real_connect($this->conn, $opt['host'], $opt['user'], $opt['pass'], $opt['db'], $opt['port'], $opt['socket'], $opt['flags']) ){
+					$this->error(mysqli_connect_errno() . " ". mysqli_connect_error());
+				}
+			}
+			else {
+				die('mysqli_init failed.');
+			}
+		}
+		
 
 		mysqli_set_charset($this->conn, $opt['charset']) or $this->error(mysqli_error($this->conn));
 		unset($opt); // I am paranoid
 	}
+
+
 
 	/**
 	 * Conventional function to run a query with placeholders. A mysqli_query wrapper with placeholders support
@@ -152,11 +179,11 @@ class bxaf_mysqli
 	 * Conventional function to fetch single row. 
 	 * 
 	 * @param resource $result - mysqli result
-	 * @param int $mode - optional fetch mode, RESULT_ASSOC|RESULT_NUM, default RESULT_ASSOC
 	 * @return array|FALSE whatever mysqli_fetch_array returns
 	 */
-	public function fetch($result,$mode=self::RESULT_ASSOC)
+	public function fetch($result)
 	{
+		$mode = $this->fetch_mode == MYSQLI_NUM ? MYSQLI_NUM : MYSQLI_ASSOC;
 		return mysqli_fetch_array($result, $mode);
 	}
 
@@ -181,7 +208,7 @@ class bxaf_mysqli
 	}
 
 	/**
-	 * Conventional function to get number of rows in the resultset. 
+	 * Conventional function to get number of rows and columns in the resultset. 
 	 * 
 	 * @param resource $result - mysqli result
 	 * @return int whatever mysqli_num_rows returns
@@ -189,6 +216,14 @@ class bxaf_mysqli
 	public function num_rows($result)
 	{
 		return mysqli_num_rows($result);
+	}
+	public function field_count($result)
+	{
+		return mysqli_num_fields($result);
+	}
+	public function num_fields($result)
+	{
+		return mysqli_num_fields($result);
 	}
 
 	/**
@@ -284,6 +319,9 @@ class bxaf_mysqli
 		return $this->get_col($this->prepare_query(func_get_args()));
 	}
 
+
+
+
 	/**
 	 * Helper function to get all the rows of resultset right out of query and optional arguments
 	 * 
@@ -301,15 +339,18 @@ class bxaf_mysqli
 		$query = $this->prepare_query(func_get_args());
 		if ( $res = $this->raw_query($query) )
 		{
-			while($row = $this->fetch($res))
-			{
-				$ret[] = $row;
-			}
+			$mode = $this->fetch_mode == MYSQLI_NUM ? MYSQLI_NUM : MYSQLI_ASSOC;
+			$ret = mysqli_fetch_all($res, $mode);		
 			$this->free($res);
 		}
 		return $ret;
 	}
+	
 	public function GetAll()
+	{	
+		return $this->get_all($this->prepare_query(func_get_args()));
+	}
+	public function GetArray()
 	{	
 		return $this->get_all($this->prepare_query(func_get_args()));
 	}
@@ -335,10 +376,33 @@ class bxaf_mysqli
 		$ret = array();
 		if ( $res = $this->raw_query($query) )
 		{
-			while($row = $this->fetch($res))
-			{
-				$ret[$row[$index]] = $row;
+			$num_fields = $this->num_fields($res);
+		
+			if($num_fields <= 1){
+				//return empty array()
 			}
+			else if($num_fields == 2){
+				while($row = $this->fetch($res))
+				{
+					if(array_key_exists($index, $row)){
+						$key = $row[$index];
+						unset($row[$index]);
+						$value = array_pop($row);
+						$ret[$key] = $value;
+					}
+				}
+			}
+			else {
+				while($row = $this->fetch($res))
+				{
+					if(array_key_exists($index, $row)){
+						$key = $row[$index];
+						unset($row[$index]);
+						$ret[$key] = $row;
+					}
+				}
+			}
+
 			$this->free($res);
 		}
 		return $ret;
@@ -362,11 +426,26 @@ class bxaf_mysqli
 		$ret = array();
 		if ( $res = $this->raw_query($query) )
 		{
-			while($row = $this->fetch($res))
-			{
-				$index = array_shift(array_keys($row));
-				$ret[$row[$index]] = $row;
+			$num_fields = $this->num_fields($res);
+			if($num_fields <= 1){
+				//return empty array()
 			}
+			else if($num_fields == 2){
+				while($row = $this->fetch($res))
+				{
+					$second = array_pop($row);
+					$first = array_pop($row);
+					$ret[$first] = $second;
+				}
+			}
+			else {
+				while($row = $this->fetch($res))
+				{
+					$first = array_shift($row);
+					$ret[$first] = $row;
+				}
+			}
+						
 			$this->free($res);
 		}
 		return $ret;
@@ -866,6 +945,68 @@ class bxaf_mysqli
 	}
 
 
+
+	/**
+	 * Helper function to get column names from a table
+	 * 
+	 * Examples:
+	 * $column_names = $db->get_column_names('Table_Name');
+	 * $column_names = $db->MetaColumnNames('Table_Name');
+	 *
+	 * @param string $table - table name
+	 * @return an array of field names, with numeric key in function get_column_names($table) or upper case field name as key in MetaColumnNames($table)
+	 */
+	public function get_column_names($table)
+	{
+		$sql = "DESCRIBE ?n";		
+		$query = $this->parse($sql, $table);
+
+		return $this->get_col($query);
+	}
+	
+	public function MetaColumnNames($table)
+	{	
+		$colnames = $this->get_column_names($table);
+		$MetaColumnNames = array();
+		foreach($colnames as $k=>$v) $MetaColumnNames[strtoupper($v)] = $v;
+		return $MetaColumnNames;
+	}
+
+	/**
+	 * Helper function to set fetch mode for function fetch(), parameter: MYSQLI_ASSOC or MYSQLI_NUM
+	 */
+	public function set_fetch_mode($mode)
+	{	
+		if($mode == MYSQLI_NUM) $this->fetch_mode = MYSQLI_NUM;
+		else $this->fetch_mode  = MYSQLI_ASSOC;
+	}
+	
+	/**
+	 * Helper function to set fetch mode for function fetch(), parameters: 1: ADODB_FETCH_NUM, other: ADODB_FETCH_ASSOC
+	 */
+	public function SetFetchMode($mode)
+	{	
+		//define('ADODB_FETCH_NUM',1); 
+		if($mode == 1) $this->fetch_mode = MYSQLI_NUM; 
+		else $this->fetch_mode  = MYSQLI_ASSOC;
+	}
+
+	public function get_conn()
+	{	
+		return $this->conn;
+	}
+
+	/**
+	 * mysqli_ping — Pings a server connection, or tries to reconnect if the connection has gone down
+	 */
+	public function ping()
+	{	
+		return mysqli_ping($this->conn);
+	}
+	public function IsConnected()
+	{	
+		return mysqli_ping($this->conn);
+	}
 
 
 	/**
