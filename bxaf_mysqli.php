@@ -1,18 +1,21 @@
-<?php
+ <?php
 class bxaf_mysqli
 {
     private $conn;
     private $stats;
     private $show_error;
     private $error_output;
-    private $defaults = array('host' => 'localhost', 'user' => 'root', 'pass' => '', 'db' => 'test', 'port' => 3306, 'socket' => NULL, 'pconnect' => TRUE, 'charset' => 'utf8', 'show_error' => 0, 'error_output' => 'bxaf_mysqli.errors.txt');
-    const RESULT_ASSOC = MYSQLI_ASSOC;
-    const RESULT_NUM = MYSQLI_NUM;
+    private $fetch_mode;
+    private $defaults = array('host' => 'localhost', 'user' => 'root', 'pass' => '', 'db' => 'test', 'port' => 3306, 'socket' => NULL, 'pconnect' => TRUE, 'fetch_mode' => MYSQLI_ASSOC, 'flags' => NULL, 'charset' => 'utf8', 'show_error' => 0, 'error_output' => 'bxaf_mysqli.errors.txt');
     function __construct($opt = array())
     {
         $opt                = array_merge($this->defaults, $opt);
         $this->show_error   = $opt['show_error'];
         $this->error_output = $opt['error_output'];
+        if ($opt['fetch_mode'] == MYSQLI_NUM)
+            $this->fetch_mode = MYSQLI_NUM;
+        else
+            $this->fetch_mode = MYSQLI_ASSOC;
         if (isset($opt['mysqli'])) {
             if ($opt['mysqli'] instanceof mysqli) {
                 $this->conn = $opt['mysqli'];
@@ -21,12 +24,27 @@ class bxaf_mysqli
                 $this->error("mysqli option must be valid instance of mysqli class");
             }
         }
-        if ($opt['pconnect']) {
-            $opt['host'] = "p:" . $opt['host'];
-        }
-        @$this->conn = mysqli_connect($opt['host'], $opt['user'], $opt['pass'], $opt['db'], $opt['port'], $opt['socket']);
-        if (!$this->conn) {
-            $this->error(mysqli_connect_errno() . " " . mysqli_connect_error());
+        if (($opt['host'] == 'localhost') || ($opt['host'] == '127.0.0.1')) {
+            if ($opt['pconnect'])
+                $opt['host'] = "p:" . $opt['host'];
+            $this->conn = mysqli_connect($opt['host'], $opt['user'], $opt['pass'], $opt['db'], $opt['port'], $opt['socket']);
+            if (mysqli_connect_errno()) {
+                die("Connect failed: %s\n" . mysqli_connect_error());
+            }
+            if (!$this->conn) {
+                $this->error(mysqli_connect_errno() . " " . mysqli_connect_error());
+            }
+        } else {
+            if ($opt['pconnect'])
+                $opt['host'] = "p:" . $opt['host'];
+            $this->conn = mysqli_init();
+            if ($this->conn) {
+                if (!mysqli_real_connect($this->conn, $opt['host'], $opt['user'], $opt['pass'], $opt['db'], $opt['port'], $opt['socket'], $opt['flags'])) {
+                    $this->error(mysqli_connect_errno() . " " . mysqli_connect_error());
+                }
+            } else {
+                die('mysqli_init failed.');
+            }
         }
         mysqli_set_charset($this->conn, $opt['charset']) or $this->error(mysqli_error($this->conn));
         unset($opt);
@@ -39,8 +57,9 @@ class bxaf_mysqli
     {
         return $this->raw_query($this->prepare_query(func_get_args()));
     }
-    public function fetch($result, $mode = self::RESULT_ASSOC)
+    public function fetch($result)
     {
+        $mode = $this->fetch_mode == MYSQLI_NUM ? MYSQLI_NUM : MYSQLI_ASSOC;
         return mysqli_fetch_array($result, $mode);
     }
     public function affected_rows()
@@ -54,6 +73,14 @@ class bxaf_mysqli
     public function num_rows($result)
     {
         return mysqli_num_rows($result);
+    }
+    public function field_count($result)
+    {
+        return mysqli_num_fields($result);
+    }
+    public function num_fields($result)
+    {
+        return mysqli_num_fields($result);
     }
     public function free($result)
     {
@@ -110,14 +137,17 @@ class bxaf_mysqli
         $ret   = array();
         $query = $this->prepare_query(func_get_args());
         if ($res = $this->raw_query($query)) {
-            while ($row = $this->fetch($res)) {
-                $ret[] = $row;
-            }
+            $mode = $this->fetch_mode == MYSQLI_NUM ? MYSQLI_NUM : MYSQLI_ASSOC;
+            $ret  = mysqli_fetch_all($res, $mode);
             $this->free($res);
         }
         return $ret;
     }
     public function GetAll()
+    {
+        return $this->get_all($this->prepare_query(func_get_args()));
+    }
+    public function GetArray()
     {
         return $this->get_all($this->prepare_query(func_get_args()));
     }
@@ -128,29 +158,53 @@ class bxaf_mysqli
         $query = $this->prepare_query($args);
         $ret   = array();
         if ($res = $this->raw_query($query)) {
-            while ($row = $this->fetch($res)) {
-                $ret[$row[$index]] = $row;
+            $num_fields = $this->num_fields($res);
+            if ($num_fields <= 1) {
+            } else if ($num_fields == 2) {
+                while ($row = $this->fetch($res)) {
+                    if (array_key_exists($index, $row)) {
+                        $key = $row[$index];
+                        unset($row[$index]);
+                        $value     = array_pop($row);
+                        $ret[$key] = $value;
+                    }
+                }
+            } else {
+                while ($row = $this->fetch($res)) {
+                    if (array_key_exists($index, $row)) {
+                        $key = $row[$index];
+                        unset($row[$index]);
+                        $ret[$key] = $row;
+                    }
+                }
             }
             $this->free($res);
         }
         return $ret;
     }
     public function GetAssoc()
-	{	
-		$query = $this->prepare_query(func_get_args());
-
-		$ret = array();
-		if ( $res = $this->raw_query($query) )
-		{
-			while($row = $this->fetch($res))
-			{
-				$index = array_shift(array_keys($row));
-				$ret[$row[$index]] = $row;
-			}
-			$this->free($res);
-		}
-		return $ret;
-	}
+    {
+        $query = $this->prepare_query(func_get_args());
+        $ret   = array();
+        if ($res = $this->raw_query($query)) {
+            $num_fields = $this->num_fields($res);
+            if ($num_fields <= 1) {
+            } else if ($num_fields == 2) {
+                while ($row = $this->fetch($res)) {
+                    $second      = array_pop($row);
+                    $first       = array_pop($row);
+                    $ret[$first] = $second;
+                }
+            } else {
+                while ($row = $this->fetch($res)) {
+                    $first       = array_shift($row);
+                    $ret[$first] = $row;
+                }
+            }
+            $this->free($res);
+        }
+        return $ret;
+    }
     public function get_assoc_col()
     {
         $args  = func_get_args();
@@ -404,6 +458,46 @@ class bxaf_mysqli
     {
         return $this->replace_batch($this->prepare_query(func_get_args()));
     }
+    public function get_column_names($table)
+    {
+        $sql   = "DESCRIBE ?n";
+        $query = $this->parse($sql, $table);
+        return $this->get_col($query);
+    }
+    public function MetaColumnNames($table)
+    {
+        $colnames        = $this->get_column_names($table);
+        $MetaColumnNames = array();
+        foreach ($colnames as $k => $v)
+            $MetaColumnNames[strtoupper($v)] = $v;
+        return $MetaColumnNames;
+    }
+    public function set_fetch_mode($mode)
+    {
+        if ($mode == MYSQLI_NUM)
+            $this->fetch_mode = MYSQLI_NUM;
+        else
+            $this->fetch_mode = MYSQLI_ASSOC;
+    }
+    public function SetFetchMode($mode)
+    {
+        if ($mode == 1)
+            $this->fetch_mode = MYSQLI_NUM;
+        else
+            $this->fetch_mode = MYSQLI_ASSOC;
+    }
+    public function get_conn()
+    {
+        return $this->conn;
+    }
+    public function ping()
+    {
+        return mysqli_ping($this->conn);
+    }
+    public function IsConnected()
+    {
+        return mysqli_ping($this->conn);
+    }
     private function raw_query($query)
     {
         $start         = microtime(TRUE);
@@ -486,10 +580,10 @@ class bxaf_mysqli
         }
         return "'" . mysqli_real_escape_string($this->conn, $value) . "'";
     }
-	public function qstr()
-	{	
-		return $this->escapeString($this->prepare_query(func_get_args()));
-	}
+    public function qstr()
+    {
+        return $this->escapeString($this->prepare_query(func_get_args()));
+    }
     private function escapeIdent($value)
     {
         if ($value) {
